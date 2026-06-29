@@ -1,18 +1,6 @@
-"""
-core/claude.py
-
-Single shared Claude service.
-Every agent calls ask_json(). Nothing else.
-
-Rules:
-- One function
-- Returns parsed dict
-- Raises ClaudeError on failure
-- No retries hidden inside agents
-"""
-
 import json
 import os
+import re
 import time
 import anthropic
 
@@ -29,6 +17,74 @@ def _get_client() -> anthropic.Anthropic:
     return _client
 
 
+def _repair_json(raw: str) -> str:
+    """
+    Attempt to repair truncated or malformed JSON.
+    Tries to close any open brackets/braces.
+    """
+    # Count open vs closed braces and brackets
+    open_braces = raw.count("{") - raw.count("}")
+    open_brackets = raw.count("[") - raw.count("]")
+
+    # Close any unclosed strings first
+    # Find last complete value boundary
+    repaired = raw.rstrip()
+
+    # Remove trailing comma if present
+    if repaired.endswith(","):
+        repaired = repaired[:-1]
+
+    # Close open brackets first (inner), then braces (outer)
+    repaired += "]" * open_brackets
+    repaired += "}" * open_braces
+
+    return repaired
+
+
+def _extract_json(raw: str) -> dict:
+    """
+    Robustly extract JSON from Claude response.
+    Tries multiple strategies before giving up.
+    """
+    # Clean markdown fences
+    if "```" in raw:
+        raw = raw.replace("```json", "").replace("```", "").strip()
+
+    # Find JSON boundaries
+    start = raw.find("{")
+    end = raw.rfind("}")
+
+    if start != -1 and end != -1:
+        candidate = raw[start:end + 1]
+
+        # Strategy 1: Direct parse
+        try:
+            return json.loads(candidate)
+        except json.JSONDecodeError:
+            pass
+
+        # Strategy 2: Repair and parse
+        try:
+            repaired = _repair_json(candidate)
+            return json.loads(repaired)
+        except json.JSONDecodeError:
+            pass
+
+        # Strategy 3: Find last valid JSON boundary
+        # Walk backwards to find last valid closing brace
+        for i in range(len(raw) - 1, start, -1):
+            if raw[i] == "}":
+                try:
+                    return json.loads(raw[start:i + 1])
+                except json.JSONDecodeError:
+                    continue
+
+    raise json.JSONDecodeError(
+        f"No valid JSON found in response",
+        raw, 0
+    )
+
+
 def ask_json(
     prompt: str,
     max_tokens: int = 2000,
@@ -37,13 +93,6 @@ def ask_json(
 ) -> dict:
     """
     Send a prompt to Claude. Return parsed JSON dict.
-
-    Usage:
-        result = ask_json(prompt)
-
-    Raises:
-        ClaudeError if all retries fail
-        json.JSONDecodeError if response is not valid JSON
     """
     client = _get_client()
     last_error = None
@@ -63,23 +112,20 @@ def ask_json(
                     raw += block.text
 
             raw = raw.strip()
+            print(f"[Claude] Response length: {len(raw)}")
 
-            # Strip markdown fences
-            if "```" in raw:
-                raw = raw.replace("```json", "").replace("```", "").strip()
-
-            # Extract first valid JSON object
-            start = raw.find("{")
-            end = raw.rfind("}")
-            if start != -1 and end != -1:
-                raw = raw[start:end + 1]
-
-            return json.loads(raw)
+            return _extract_json(raw)
 
         except json.JSONDecodeError as e:
-            raise json.JSONDecodeError(
-                f"Claude returned invalid JSON: {str(e)}", e.doc, e.pos
-            )
+            last_error = e
+            if attempt < retries:
+                print(f"[Claude] JSON parse failed attempt {attempt + 1}, retrying")
+                time.sleep(2 ** attempt)
+            else:
+                raise json.JSONDecodeError(
+                    f"Claude returned invalid JSON: {str(e)}",
+                    str(e), 0
+                )
         except Exception as e:
             last_error = e
             if attempt < retries:
