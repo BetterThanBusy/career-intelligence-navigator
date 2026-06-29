@@ -29,7 +29,7 @@ Return ONLY this JSON object:
 }
 
 Rules:
-- Generate exactly 8 weeks
+- Generate exactly 4 weeks
 - Each week has ONE primary resource — not a list
 - Hours must equal {{hours_per_week}} exactly
 - Milestones must be demonstrable (a certificate, a GitHub commit, a LinkedIn post)
