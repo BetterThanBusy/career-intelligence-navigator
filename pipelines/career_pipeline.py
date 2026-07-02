@@ -1,150 +1,93 @@
 """
-pipelines/career_pipeline.py
+Career Intelligence Pipeline — Redesigned
+3 focused agents. Minimum context passing. ~4,500 tokens total.
 
-Career Intelligence Pipeline: 7 focused agents.
+Agent 1: Profile Intelligence  → understands WHO they are (1,200 tokens)
+Agent 2: Market Intelligence   → understands WHAT market wants (1,000 tokens)  
+Agent 3: Career Report         → produces the intelligence report (2,000 tokens)
 
-Each agent:
-- Receives only what it needs
-- Returns a small focused JSON
-- Fails independently (won't break other agents)
-
-Agent 1: ResumeParserAgent        → structured profile
-Agent 2: MarketIntelligenceAgent  → live market data
-Agent 3: GapAnalyzerAgent         → gap score + plan
-Agent 4: LearningPrioritiesAgent  → what to learn + order
-Agent 5: CertificationsAgent      → which certs + ROI
-Agent 6: WeeklyScheduleAgent      → week by week plan
-Agent 7: PortfolioAgent           → GitHub projects
-Agent 8: InterviewPrepAgent       → questions + salary
-
-All results stored independently.
-Orchestrator combines into final report.
+Original resume text used ONCE in Agent 1 only.
+Agents 2 and 3 receive only compact extracted data.
 """
 
-import json
-
-from agents.resume_parser import ResumeParserAgent
+from agents.profile_intelligence import ProfileIntelligenceAgent
 from agents.market_intelligence import MarketIntelligenceAgent
-from agents.gap_analyzer import GapAnalyzerAgent
-from agents.learning_priorities import LearningPrioritiesAgent
-from agents.certifications import CertificationsAgent
-from agents.weekly_schedule import WeeklyScheduleAgent
-from agents.portfolio import PortfolioAgent
-from agents.interview_prep import InterviewPrepAgent
+from agents.career_report import CareerReportAgent
 
 
 def run_career_pipeline(
-    resume_text: str,
-    target_role: str = None,
+    resume_text: str = None,
+    current_role: str = None,
     industry: str = None,
+    years_experience: int = None,
+    career_goal: str = None,
+    biggest_challenge: str = None,
     hours_per_week: int = 5,
     budget: str = "free",
-    learning_style: str = "mixed",
     timeline_months: int = 3,
+    target_role: str = None,
 ) -> dict:
-    """
-    Run full Career Intelligence analysis.
-    Returns structured report ready for API response and DB storage.
-    """
 
-    print("[Career Pipeline] Starting")
+    print("[Career Pipeline] Starting — 3 agent chain")
 
-    # ── Agent 1: Parse Resume ──────────────────────────────────
-    print("[Career Pipeline] Agent 1: Parsing resume")
-    profile = ResumeParserAgent().run(resume_text=resume_text)
-    role = target_role or profile.get("current_role", "Professional")
-    skills = json.dumps(profile.get("skills", [])[:8])
-    print(f"[Career Pipeline] Role: {role}")
+    # ── Agent 1: Profile Intelligence ─────────────────────────
+    # Resume text used HERE and ONLY here
+    print("[Career Pipeline] Agent 1: Profile intelligence")
+    profile = ProfileIntelligenceAgent().run(
+        resume_text=resume_text or "Not provided",
+        current_role=current_role or "Not specified",
+        industry=industry or "Not specified",
+        years_experience=years_experience or "Not specified",
+        career_goal=career_goal or "Not specified",
+        biggest_challenge=biggest_challenge or "Not specified"
+    )
+
+    # Extract ONLY what downstream agents need — not full profile
+    role = profile.get("role", target_role or current_role or "Professional")
+    top_skills = ", ".join(profile.get("top_skills", [])[:6])
+    key_gaps = profile.get("key_gaps", [])[:3]
+    experience_level = profile.get("experience_level", "mid-career")
+    print(f"[Career Pipeline] Profile: {role}, {experience_level}")
 
     # ── Agent 2: Market Intelligence ──────────────────────────
+    # Receives: role + top_skills only (NOT resume text)
     print("[Career Pipeline] Agent 2: Market intelligence")
     market = MarketIntelligenceAgent().run(
         role=role,
-        skills=skills,
+        top_skills=top_skills,
         industry=industry or "general"
     )
-    print(f"[Career Pipeline] Hiring trend: {market.get('hiring_trend')}")
 
-    # ── Agent 3: Gap Analysis ─────────────────────────────────
-    print("[Career Pipeline] Agent 3: Gap analysis")
-    in_demand = json.dumps(market.get("in_demand_skills", []))
-    at_risk = json.dumps(market.get("skills_at_risk", []))
-    gap = GapAnalyzerAgent().run(
-        role=role,
-        current_skills=skills,
-        in_demand_skills=in_demand,
-        skills_at_risk=at_risk,
-        years_experience=profile.get("years_experience", 5)
-    )
-    print(f"[Career Pipeline] Gap score: {gap.get('gap_score')}")
+    in_demand = ", ".join(market.get("in_demand_skills", [])[:5])
+    salary_mid = market.get("salary_range", {}).get("mid", 0)
+    hiring_trend = market.get("hiring_trend", "stable")
+    print(f"[Career Pipeline] Market: {hiring_trend}, salary mid ${salary_mid}")
 
-    # ── Agent 4: Learning Priorities ──────────────────────────
-    print("[Career Pipeline] Agent 4: Learning priorities")
-    critical_gaps = json.dumps(gap.get("critical_gaps", [])[:4])
-    target = gap.get("recommended_pivot", {}).get("target_role", role)
-    priorities = LearningPrioritiesAgent().run(
-        target_role=target,
-        critical_gaps=critical_gaps
-    )
-    priority_list = priorities.get("priorities", [])
-    skills_to_learn = json.dumps([p.get("skill") for p in priority_list[:4]])
-    print(f"[Career Pipeline] Priorities set: {len(priority_list)}")
-
-    # ── Agent 5: Certifications ───────────────────────────────
-    print("[Career Pipeline] Agent 5: Certifications")
-    certs = CertificationsAgent().run(
-        target_role=target,
-        skills_to_certify=skills_to_learn
-    )
-    cert_list = certs.get("certifications", [])
-    print(f"[Career Pipeline] Certs found: {len(cert_list)}")
-
-    # ── Agent 6: Weekly Schedule ──────────────────────────────
-    print("[Career Pipeline] Agent 6: Weekly schedule")
-    schedule = WeeklyScheduleAgent().run(
-        target_role=target,
-        priorities=json.dumps(priority_list[:4]),
-        hours_per_week=hours_per_week,
-        timeline_months=timeline_months,
-        budget=budget,
-        learning_style=learning_style
-    )
-    schedule_list = schedule.get("weeks", [])
-    print(f"[Career Pipeline] Schedule weeks: {len(schedule_list)}")
-
-    # ── Agent 7: Portfolio Projects ───────────────────────────
-    print("[Career Pipeline] Agent 7: Portfolio projects")
-    portfolio = PortfolioAgent().run(
-        target_role=target,
-        skills_to_demonstrate=skills_to_learn
-    )
-    project_list = portfolio.get("projects", [])
-    print(f"[Career Pipeline] Projects: {len(project_list)}")
-
-    # ── Agent 8: Interview Prep ───────────────────────────────
-    print("[Career Pipeline] Agent 8: Interview prep")
-    interview = InterviewPrepAgent().run(
-        target_role=target,
-        critical_gaps=critical_gaps,
-        salary_range=json.dumps(market.get("salary_range", {}))
-    )
-    print("[Career Pipeline] Interview prep complete")
-
-    # ── Compose Final Report ──────────────────────────────────
-    report = {
-        "target_role": target,
-        "profile": profile,
-        "market_intelligence": market,
-        "gap_analysis": gap,
-        "learning_priorities": priority_list,
-        "certifications": cert_list,
-        "weekly_schedule": schedule_list,
-        "portfolio_projects": project_list,
-        "interview_prep": interview,
-        "quick_wins": gap.get("quick_wins", []),
-        "timeline_months": timeline_months,
+    # ── Agent 3: Career Report ────────────────────────────────
+    # Receives: compact profile + compact market data only
+    # This is the intelligence layer — produces the full report
+    print("[Career Pipeline] Agent 3: Generating career report")
+    report_input = {
+        "role": role,
+        "experience_level": experience_level,
+        "top_skills": top_skills,
+        "key_gaps": ", ".join(str(g) for g in key_gaps),
+        "career_goal": career_goal or "career growth",
+        "biggest_challenge": biggest_challenge or "staying relevant",
+        "in_demand_skills": in_demand,
+        "salary_mid": salary_mid,
+        "hiring_trend": hiring_trend,
         "hours_per_week": hours_per_week,
+        "budget": budget,
+        "timeline_months": timeline_months
     }
 
-    print("[Career Pipeline] Complete")
-    return report
+    report = CareerReportAgent().run(**report_input)
+    print("[Career Pipeline] Report complete")
+
+    return {
+        "target_role": role,
+        "profile_summary": profile,
+        "market_intelligence": market,
+        "career_report": report
+    }
