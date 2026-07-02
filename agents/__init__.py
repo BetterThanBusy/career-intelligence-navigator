@@ -8,3 +8,5 @@ from agents.certifications import CertificationsAgent
 from agents.weekly_schedule import WeeklyScheduleAgent
 from agents.portfolio import PortfolioAgent
 from agents.interview_prep import InterviewPrepAgent
+from agents.profile_intelligence import ProfileIntelligenceAgent
+from agents.career_report import CareerReportAgent
