@@ -39,3 +39,4 @@ logs/
 *.pem
 *.key
 secrets/
+.env
